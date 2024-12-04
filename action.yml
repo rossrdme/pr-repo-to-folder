@@ -1,0 +1,94 @@
+name: 'BiDi Sync Pull Request'
+description: 'Automatically create a pull request based on changes in a BiDi sync repository'
+
+inputs:
+  bidi-sync-repo:
+    description: 'Source repository for syncing'
+    required: true
+  bidi-repo-folder:
+    description: 'Folder in Bidi Sync repo to sync from (leave empty for root)'
+    required: false
+    default: ''
+  primary-repo:
+    description: 'Target repository for the PR'
+    required: true
+  primary-repo-folder:
+    description: 'Folder in target repository to sync to'
+    required: true
+  pr-base:
+    description: 'Base branch for the PR'
+    required: false
+    default: 'main'
+  pr-branch:
+    description: 'Branch name for the PR'
+    required: false
+    default: 'docs-sync'
+  access-token:
+    description: 'GitHub token with repository access'
+    required: true
+  git-user-name:
+    description: 'Git user name for commits'
+    required: false
+    default: 'ReadMe GitHub Actions Bot'
+  git-user-email:
+    description: 'Git user email for commits'
+    required: false
+    default: 'noreply@readme.com'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout BiDi Sync repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.bidi-sync-repo }}
+        path: bidi-sync-repo-checkout
+
+    - name: Checkout primary repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.primary-repo }}
+        path: primary-repo-checkout
+        token: ${{ inputs.access-token }}
+        
+    - name: Check for changes
+      id: check_changes
+      shell: bash
+      run: |
+        if [ -n "$(diff -r bidi-sync-repo-checkout/${{ inputs.bidi-repo-folder }} primary-repo-checkout/${{ inputs.primary-repo-folder }})" ]; then
+          echo "changes_detected=true" >> $GITHUB_OUTPUT
+        else
+          echo "changes_detected=false" >> $GITHUB_OUTPUT
+          echo "No changes detected. Skipping PR creation."
+        fi
+        
+    - name: Sync to Target Folder
+      if: steps.check_changes.outputs.changes_detected == 'true'
+      shell: bash
+      run: |
+        # Clear contents of target folder in primary repo
+        rm -rf primary-repo-checkout/${{ inputs.primary-repo-folder }}/*
+        
+        # Copy BiDi Sync repo contents to target folder
+        cp -r bidi-sync-repo-checkout/${{ inputs.bidi-repo-folder }}/* primary-repo-checkout/${{ inputs.primary-repo-folder }}
+        
+        # Configure git
+        cd primary-repo-checkout
+        git config user.name "${{ inputs.git-user-name }}"
+        git config user.email "${{ inputs.git-user-email }}"
+
+    - name: Create pull request
+      if: steps.check_changes.outputs.changes_detected == 'true'
+      uses: peter-evans/create-pull-request@v7
+      with:
+        path: primary-repo-checkout
+        token: ${{ inputs.access-token }}
+        commit-message: "Sync from ${{ inputs.bidi-sync-repo }} to ${{ inputs.primary-repo-folder }} in ${{ inputs.primary-repo }}"
+        title: "Update ${{ inputs.primary-repo-folder }} with latest changes from ${{ inputs.bidi-sync-repo }}"
+        body: |
+          This PR updates the `${{ inputs.primary-repo-folder }}` folder with the latest changes from `${{ inputs.bidi-sync-repo }}`.
+          
+          Triggered by commit: ${{ github.sha }}
+          Author: ${{ github.actor }}
+        base: ${{ inputs.pr-base }}
+        branch: ${{ inputs.pr-branch }}
